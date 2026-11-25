@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import csv
 import json
 import tkinter as tk
 from dataclasses import dataclass
@@ -271,8 +272,11 @@ class BeamDesigner:
             if status:
                 status.pack(anchor="w")
             self.metric_widgets[key] = (value, detail, status)
-        self.reaction_label = ttk.Label(self.right, text="", foreground=COLORS["navy"], background=COLORS["canvas"], font=("Helvetica", 10, "bold"))
-        self.reaction_label.grid(row=1, column=0, sticky="w", pady=(0, 8), padx=8)
+        summary_bar = ttk.Frame(self.right)
+        summary_bar.grid(row=1, column=0, sticky="ew", pady=(0, 8), padx=8)
+        self.reaction_label = ttk.Label(summary_bar, text="", foreground=COLORS["navy"], background=COLORS["canvas"], font=("Helvetica", 10, "bold"))
+        self.reaction_label.pack(side="left", fill="x", expand=True)
+        ttk.Button(summary_bar, text="Export results", style="Accent.TButton", command=self.export_results).pack(side="right", padx=(8, 0))
 
     def _make_canvas(self, parent: tk.Widget, height: int) -> tk.Canvas:
         return tk.Canvas(parent, height=height, bg=COLORS["white"], highlightthickness=1, highlightbackground=COLORS["line"])
@@ -471,6 +475,42 @@ class BeamDesigner:
         self.current_file = path
         self.root.title(f"Beam Designer — {path.rsplit('/', 1)[-1]}")
         self._refresh()
+
+    def export_results(self) -> None:
+        path = filedialog.asksaveasfilename(
+            title="Export Beam Results",
+            defaultextension=".csv",
+            filetypes=(("CSV for Excel", "*.csv"), ("All files", "*")),
+        )
+        if not path:
+            return
+        analysis = self.analysis
+        span_in = analysis["span_in"]
+        station_count = 400
+        positions = {span_in * index / station_count for index in range(station_count + 1)}
+        positions.update(clamp(point, 0, span_in) for point in analysis["breakpoints"])
+        point_positions = {
+            load.position * 12 for load in self.loads if load.kind == "point"
+        }
+        try:
+            with open(path, "w", newline="", encoding="utf-8-sig") as results_file:
+                writer = csv.writer(results_file)
+                writer.writerow(("x (ft)", "V (kips)", "M (kip-ft)", "Deflection (in)"))
+                for x in sorted(positions):
+                    shear_values = (
+                        (analysis["shear_at"](x, include_at=False), analysis["shear_at"](x, include_at=True))
+                        if x in point_positions
+                        else (analysis["shear_at"](x, include_at=True),)
+                    )
+                    for shear_value in shear_values:
+                        writer.writerow((
+                            f"{x / 12:.6f}",
+                            f"{shear_value:.6f}",
+                            f"{analysis['moment_at'](x) / 12:.6f}",
+                            f"{analysis['deflection_at'](x):.6f}",
+                        ))
+        except (OSError, csv.Error) as exc:
+            messagebox.showerror("Could not export results", str(exc), parent=self.root)
 
     def _install_scroll_bindings(self, parent: tk.Widget) -> None:
         """Catch wheel events before widget-class bindings can consume them."""

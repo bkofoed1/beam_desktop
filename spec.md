@@ -72,6 +72,7 @@ stiff enough.
 - A dimensioned cross-section preview in Beam setup: steel W-shapes show d,
   bf, tf, and tw; lumber shows actual dressed b and d dimensions
 - Pass or fail for bending and deflection
+- Export results to CSV with x, shear V, moment M, and deflection along the beam.
 - A pass is not a complete structural design approval
 
 ## Look and feel
