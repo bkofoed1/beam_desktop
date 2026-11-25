@@ -50,6 +50,11 @@ stiff enough.
 - Deflection limit: L/240 or L/360 (default L/360).
 - Self-weight is ignored.
 
+## Save and open
+- The File menu provides Save and Open commands for beam design files.
+- Save stores the support type, span, material and section, deflection limit,
+  and all point and uniform loads in a JSON file. Open restores that beam state.
+
 ## Calculations
 - Use ASD with the entered service loads representing the combined D + L
   case; do not generate other load combinations or include beam self-weight

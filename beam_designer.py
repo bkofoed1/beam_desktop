@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import math
+import json
 import tkinter as tk
 from dataclasses import dataclass
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 from typing import Callable
 
 
@@ -108,6 +109,7 @@ class BeamDesigner:
         self.limit = tk.IntVar(value=360)
         self.loads = [Load("uniform", 1.0, start=0, end=20, id=1)]
         self.next_load_id = 2
+        self.current_file: str | None = None
         self.drag_load: Load | None = None
         self.cursor_ratio: float | None = None
         self.analysis: dict = {}
@@ -137,6 +139,17 @@ class BeamDesigner:
         return frame
 
     def _build_ui(self) -> None:
+        menubar = tk.Menu(self.root)
+        file_menu = tk.Menu(menubar, tearoff=False)
+        file_menu.add_command(label="Save", command=self.save_design, accelerator="⌘S" if self.root.tk.call("tk", "windowingsystem") == "aqua" else "Ctrl+S")
+        file_menu.add_command(label="Open…", command=self.open_design, accelerator="⌘O" if self.root.tk.call("tk", "windowingsystem") == "aqua" else "Ctrl+O")
+        menubar.add_cascade(label="File", menu=file_menu)
+        self.root.configure(menu=menubar)
+        self.root.bind("<Command-s>", lambda _e: self.save_design())
+        self.root.bind("<Command-o>", lambda _e: self.open_design())
+        self.root.bind("<Control-s>", lambda _e: self.save_design())
+        self.root.bind("<Control-o>", lambda _e: self.open_design())
+
         self.app_canvas = tk.Canvas(self.root, bg=COLORS["canvas"], highlightthickness=0)
         self.app_scrollbar = ttk.Scrollbar(self.root, orient="vertical", command=self.app_canvas.yview)
         self.app_canvas.configure(yscrollcommand=self.app_scrollbar.set)
@@ -324,6 +337,140 @@ class BeamDesigner:
             units = -int(delta / 120) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
         target.yview_scroll(units, "units")
         return "break"
+
+    def _design_data(self) -> dict:
+        loads = []
+        for load in self.loads:
+            entry = {"type": load.kind, "magnitude": load.magnitude}
+            if load.kind == "point":
+                entry["position_ft"] = load.position
+            else:
+                entry["start_ft"] = load.start
+                entry["end_ft"] = load.end
+            loads.append(entry)
+        return {
+            "format": "beam-designer",
+            "version": 1,
+            "beam": {
+                "support_type": self.support.get(),
+                "span_ft": self.span.get(),
+                "material": self.material.get(),
+                "section": self.section.get(),
+                "deflection_limit": self.limit.get(),
+            },
+            "loads": loads,
+        }
+
+    def save_design(self) -> None:
+        path = self.current_file
+        if path is None:
+            path = filedialog.asksaveasfilename(
+                title="Save Beam Design",
+                defaultextension=".json",
+                filetypes=(("Beam design JSON", "*.json"), ("All files", "*")),
+            )
+            if not path:
+                return
+        try:
+            with open(path, "w", encoding="utf-8") as design_file:
+                json.dump(self._design_data(), design_file, indent=2)
+                design_file.write("\n")
+        except (OSError, TypeError, ValueError) as exc:
+            messagebox.showerror("Could not save design", str(exc), parent=self.root)
+            return
+        self.current_file = path
+        self.root.title(f"Beam Designer — {path.rsplit('/', 1)[-1]}")
+
+    @staticmethod
+    def _finite_number(value, label: str) -> float:
+        if isinstance(value, bool):
+            raise ValueError(f"{label} must be a number.")
+        try:
+            number = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{label} must be a number.") from exc
+        if not math.isfinite(number):
+            raise ValueError(f"{label} must be finite.")
+        return number
+
+    def _parse_design(self, data: dict) -> tuple[dict, list[Load]]:
+        if not isinstance(data, dict) or data.get("format") != "beam-designer" or data.get("version") != 1:
+            raise ValueError("This is not a supported Beam Designer file.")
+        beam = data.get("beam")
+        if not isinstance(beam, dict):
+            raise ValueError("The file is missing beam settings.")
+        support = beam.get("support_type")
+        if support not in ("Simply supported", "Cantilever"):
+            raise ValueError("The support type in this file is not supported.")
+        span = self._finite_number(beam.get("span_ft"), "Span")
+        if not MIN_SPAN <= span <= MAX_SPAN:
+            raise ValueError(f"Span must be between {MIN_SPAN:g} and {MAX_SPAN:g} ft.")
+        material_name = beam.get("material")
+        if not isinstance(material_name, str) or material_name not in MATERIALS:
+            raise ValueError("The material in this file is not supported.")
+        section = beam.get("section")
+        if not isinstance(section, str) or section not in MATERIALS[material_name]["sections"]:
+            raise ValueError("The section does not belong to the selected material.")
+        limit_value = self._finite_number(beam.get("deflection_limit"), "Deflection limit")
+        if limit_value not in (240, 360):
+            raise ValueError("Deflection limit must be L/240 or L/360.")
+        limit = int(limit_value)
+
+        saved_loads = data.get("loads")
+        if not isinstance(saved_loads, list):
+            raise ValueError("The file must contain a loads list.")
+        loads = []
+        for index, entry in enumerate(saved_loads, start=1):
+            if not isinstance(entry, dict):
+                raise ValueError(f"Load {index} is invalid.")
+            kind = entry.get("type")
+            if kind not in ("point", "uniform"):
+                raise ValueError(f"Load {index} has an unsupported type.")
+            magnitude = self._finite_number(entry.get("magnitude"), f"Load {index} magnitude")
+            if magnitude < 0:
+                raise ValueError(f"Load {index} magnitude cannot be negative.")
+            if kind == "point":
+                position = self._finite_number(entry.get("position_ft"), f"Load {index} position")
+                if not 0 <= position <= span:
+                    raise ValueError(f"Load {index} position must be within the beam span.")
+                loads.append(Load(kind, magnitude, position=position, id=index))
+            else:
+                start = self._finite_number(entry.get("start_ft"), f"Load {index} start")
+                end = self._finite_number(entry.get("end_ft"), f"Load {index} end")
+                if not 0 <= start <= end <= span:
+                    raise ValueError(f"Load {index} start and end must be within the beam span and ordered.")
+                loads.append(Load(kind, magnitude, start=start, end=end, id=index))
+        return {
+            "support": support,
+            "span": span,
+            "material": material_name,
+            "section": section,
+            "limit": limit,
+        }, loads
+
+    def open_design(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Open Beam Design",
+            filetypes=(("Beam design JSON", "*.json"), ("All files", "*")),
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as design_file:
+                settings, loads = self._parse_design(json.load(design_file))
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            messagebox.showerror("Could not open design", str(exc), parent=self.root)
+            return
+        self.support.set(settings["support"])
+        self.span.set(settings["span"])
+        self.material.set(settings["material"])
+        self.section.set(settings["section"])
+        self.limit.set(settings["limit"])
+        self.loads = loads
+        self.next_load_id = len(loads) + 1
+        self.current_file = path
+        self.root.title(f"Beam Designer — {path.rsplit('/', 1)[-1]}")
+        self._refresh()
 
     def _install_scroll_bindings(self, parent: tk.Widget) -> None:
         """Catch wheel events before widget-class bindings can consume them."""
