@@ -137,13 +137,26 @@ class BeamDesigner:
         return frame
 
     def _build_ui(self) -> None:
-        header = ttk.Frame(self.root, padding=(24, 18, 24, 12))
+        self.app_canvas = tk.Canvas(self.root, bg=COLORS["canvas"], highlightthickness=0)
+        self.app_scrollbar = ttk.Scrollbar(self.root, orient="vertical", command=self.app_canvas.yview)
+        self.app_canvas.configure(yscrollcommand=self.app_scrollbar.set)
+        self.app_scrollbar.pack(side="right", fill="y")
+        self.app_canvas.pack(side="left", fill="both", expand=True)
+        self.content = ttk.Frame(self.app_canvas)
+        self.content_window = self.app_canvas.create_window((0, 0), window=self.content, anchor="nw")
+        self.content.bind("<Configure>", lambda _e: self.app_canvas.configure(scrollregion=self.app_canvas.bbox("all")))
+        self.app_canvas.bind("<Configure>", lambda e: self.app_canvas.itemconfigure(self.content_window, width=e.width))
+        self.root.bind_all("<MouseWheel>", self._on_mousewheel, add="+")
+        self.root.bind_all("<Button-4>", self._on_mousewheel, add="+")
+        self.root.bind_all("<Button-5>", self._on_mousewheel, add="+")
+
+        header = ttk.Frame(self.content, padding=(24, 18, 24, 12))
         header.pack(fill="x")
         ttk.Label(header, text="Beam Designer", style="Title.TLabel").pack(side="left")
         self.example_label = ttk.Label(header, text="●  Example loaded", foreground=COLORS["green"])
         self.example_label.pack(side="right", anchor="e")
 
-        self.main = ttk.Frame(self.root, padding=(18, 0, 18, 16))
+        self.main = ttk.Frame(self.content, padding=(18, 0, 18, 16))
         self.main.pack(fill="both", expand=True)
         self.main.columnconfigure(0, weight=0, minsize=345)
         self.main.columnconfigure(1, weight=1)
@@ -287,7 +300,30 @@ class BeamDesigner:
             canvas.bind("<Leave>", self._hide_cursor)
             self.plots[key] = canvas
 
-        ttk.Label(self.root, text="ASD · D + L service loads · Self-weight excluded · A pass is not a complete structural design approval", foreground=COLORS["muted"], background=COLORS["canvas"], font=("Helvetica", 9)).pack(anchor="e", padx=24, pady=(0, 10))
+        ttk.Label(self.content, text="ASD · D + L service loads · Self-weight excluded · A pass is not a complete structural design approval", foreground=COLORS["muted"], background=COLORS["canvas"], font=("Helvetica", 9)).pack(anchor="e", padx=24, pady=(0, 10))
+
+    def _on_mousewheel(self, event) -> str:
+        """Scroll the load editor under the pointer, or the full app otherwise."""
+        widget = self.root.winfo_containing(event.x_root, event.y_root)
+        in_load_editor = False
+        while widget is not None:
+            if widget is self.load_canvas:
+                in_load_editor = True
+                break
+            widget = getattr(widget, "master", None)
+        target = self.load_canvas if in_load_editor else self.app_canvas
+        number = getattr(event, "num", None)
+        if number == 4:
+            units = -1
+        elif number == 5:
+            units = 1
+        else:
+            delta = getattr(event, "delta", 0)
+            if not delta:
+                return "break"
+            units = -int(delta / 120) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
+        target.yview_scroll(units, "units")
+        return "break"
 
     def _on_material(self, _event=None) -> None:
         sections = tuple(MATERIALS[self.material.get()]["sections"])
