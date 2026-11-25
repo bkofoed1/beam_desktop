@@ -1,0 +1,1 @@
+- Asked: Update spec.md to describe a Python desktop app using Tkinter; don't build anything. Changed: Updated the purpose, look and feel, and first app build step to specify a Tkinter desktop application. No application was built. Worked: Yes; the spec now describes the Tkinter desktop app.
