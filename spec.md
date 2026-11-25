@@ -73,6 +73,8 @@ stiff enough.
   bf, tf, and tw; lumber shows actual dressed b and d dimensions
 - Pass or fail for bending and deflection
 - Export results to CSV with x, shear V, moment M, and deflection along the beam.
+- Export a PDF calculation sheet with the inputs, applied loads, beam sketch,
+  three response diagrams, reactions, and bending and deflection checks.
 - A pass is not a complete structural design approval
 
 ## Look and feel

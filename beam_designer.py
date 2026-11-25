@@ -7,6 +7,7 @@ import csv
 import json
 import tkinter as tk
 from dataclasses import dataclass
+from datetime import date
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable
 
@@ -93,6 +94,100 @@ def peak_abs(function: Callable[[float], float], length: float, breaks: list[flo
                 first = right - ratio * (right - left)
         consider((left + right) / 2)
     return best_x, best_y
+
+
+class VectorPDF:
+    """Small dependency-free PDF writer for the calculation sheet graphics."""
+
+    width = 792
+    height = 612
+
+    def __init__(self) -> None:
+        self.pages: list[bytes] = []
+        self.commands: list[str] = []
+
+    def new_page(self) -> None:
+        if self.commands:
+            self.pages.append("\n".join(self.commands).encode("latin-1", "replace"))
+        self.commands = []
+
+    def text(self, x: float, y: float, value: str, size: float = 9, *, bold: bool = False, color: str = "#17283f") -> None:
+        red, green, blue = self._rgb(color)
+        safe = str(value).encode("latin-1", "replace").decode("latin-1")
+        safe = safe.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        font = "F2" if bold else "F1"
+        self.commands.append(f"q {red:.3f} {green:.3f} {blue:.3f} rg BT /{font} {size:.2f} Tf 1 0 0 1 {x:.2f} {y:.2f} Tm ({safe}) Tj ET Q")
+
+    @staticmethod
+    def _rgb(color: str) -> tuple[float, float, float]:
+        return tuple(int(color[index:index + 2], 16) / 255 for index in (1, 3, 5))
+
+    def line(self, x1: float, y1: float, x2: float, y2: float, *, color: str = "#dce5ef", width: float = 1, dash: bool = False) -> None:
+        red, green, blue = self._rgb(color)
+        dash_op = "[3 3] 0 d" if dash else "[] 0 d"
+        self.commands.append(f"q {red:.3f} {green:.3f} {blue:.3f} RG {width:.2f} w {dash_op} {x1:.2f} {y1:.2f} m {x2:.2f} {y2:.2f} l S Q")
+
+    def rect(self, x: float, y: float, width: float, height: float, *, fill: str | None = None, stroke: str | None = None, line_width: float = 1) -> None:
+        ops = ["q"]
+        if fill:
+            r, g, b = self._rgb(fill)
+            ops.append(f"{r:.3f} {g:.3f} {b:.3f} rg")
+        if stroke:
+            r, g, b = self._rgb(stroke)
+            ops.extend((f"{r:.3f} {g:.3f} {b:.3f} RG", f"{line_width:.2f} w"))
+        ops.append(f"{x:.2f} {y:.2f} {width:.2f} {height:.2f} re")
+        ops.append("B" if fill and stroke else "f" if fill else "S")
+        ops.append("Q")
+        self.commands.append(" ".join(ops))
+
+    def polyline(self, points: list[tuple[float, float]], *, color: str, width: float = 1.5) -> None:
+        if len(points) < 2:
+            return
+        red, green, blue = self._rgb(color)
+        ops = [f"q {red:.3f} {green:.3f} {blue:.3f} RG {width:.2f} w [] 0 d {points[0][0]:.2f} {points[0][1]:.2f} m"]
+        ops.extend(f"{x:.2f} {y:.2f} l" for x, y in points[1:])
+        ops.extend(("S", "Q"))
+        self.commands.append(" ".join(ops))
+
+    def save(self, path: str) -> None:
+        if self.commands:
+            self.pages.append("\n".join(self.commands).encode("latin-1", "replace"))
+        objects: list[bytes | None] = [None]
+
+        def add_object(value: bytes) -> int:
+            objects.append(value)
+            return len(objects) - 1
+
+        catalog_id = add_object(b"")
+        pages_id = add_object(b"")
+        regular_font_id = add_object(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+        bold_font_id = add_object(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>")
+        page_ids = []
+        for content in self.pages:
+            stream_id = add_object(b"<< /Length " + str(len(content)).encode("ascii") + b" >>\nstream\n" + content + b"\nendstream")
+            page_id = add_object((
+                f"<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 {self.width} {self.height}] "
+                f"/Resources << /Font << /F1 {regular_font_id} 0 R /F2 {bold_font_id} 0 R >> >> "
+                f"/Contents {stream_id} 0 R >>"
+            ).encode("ascii"))
+            page_ids.append(page_id)
+        objects[catalog_id] = f"<< /Type /Catalog /Pages {pages_id} 0 R >>".encode("ascii")
+        kids = " ".join(f"{page_id} 0 R" for page_id in page_ids)
+        objects[pages_id] = f"<< /Type /Pages /Kids [{kids}] /Count {len(page_ids)} >>".encode("ascii")
+        body = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+        offsets = [0]
+        for object_id, value in enumerate(objects[1:], start=1):
+            offsets.append(len(body))
+            body.extend(f"{object_id} 0 obj\n".encode("ascii"))
+            body.extend(value or b"")
+            body.extend(b"\nendobj\n")
+        xref_offset = len(body)
+        body.extend(f"xref\n0 {len(objects)}\n0000000000 65535 f \n".encode("ascii"))
+        for offset in offsets[1:]:
+            body.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+        body.extend(f"trailer\n<< /Size {len(objects)} /Root {catalog_id} 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n".encode("ascii"))
+        with open(path, "wb") as pdf_file:
+            pdf_file.write(body)
 
 
 class BeamDesigner:
@@ -276,6 +371,7 @@ class BeamDesigner:
         summary_bar.grid(row=1, column=0, sticky="ew", pady=(0, 8), padx=8)
         self.reaction_label = ttk.Label(summary_bar, text="", foreground=COLORS["navy"], background=COLORS["canvas"], font=("Helvetica", 10, "bold"))
         self.reaction_label.pack(side="left", fill="x", expand=True)
+        ttk.Button(summary_bar, text="Calculation sheet PDF", command=self.export_calculation_sheet).pack(side="right", padx=(8, 0))
         ttk.Button(summary_bar, text="Export results", style="Accent.TButton", command=self.export_results).pack(side="right", padx=(8, 0))
 
     def _make_canvas(self, parent: tk.Widget, height: int) -> tk.Canvas:
@@ -511,6 +607,273 @@ class BeamDesigner:
                         ))
         except (OSError, csv.Error) as exc:
             messagebox.showerror("Could not export results", str(exc), parent=self.root)
+
+    def export_calculation_sheet(self) -> None:
+        path = filedialog.asksaveasfilename(
+            title="Save Calculation Sheet",
+            defaultextension=".pdf",
+            filetypes=(("PDF document", "*.pdf"), ("All files", "*")),
+        )
+        if not path:
+            return
+        try:
+            report = VectorPDF()
+            if len(self.loads) <= 3:
+                self._draw_calc_inputs_compact(report)
+                self._draw_calc_analysis(report, compact=True)
+            else:
+                self._draw_calc_inputs(report)
+                report.new_page()
+                self._draw_calc_analysis(report)
+            report.save(path)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Could not save calculation sheet", str(exc), parent=self.root)
+
+    def _draw_calc_inputs_compact(self, pdf: VectorPDF) -> None:
+        material, section = self._section()
+        pdf.text(32, 580, "Beam Designer | Calculation Sheet", 19, bold=True, color=COLORS["navy"])
+        pdf.text(32, 562, f"Generated {date.today().isoformat()}  |  Preliminary ASD analysis", 8.5, color=COLORS["muted"])
+        pdf.line(32, 553, 760, 553, color=COLORS["line"])
+        pdf.text(32, 535, "BEAM INPUTS", 9.5, bold=True, color=COLORS["blue"])
+        fields = (
+            (("Support", self.support.get()), ("Span", f"{self.span.get():g} ft"), ("Material", self.material.get())),
+            (("Section", self.section.get()), ("Elastic modulus E", f"{material['E']:g} ksi"), ("Moment of inertia Ix", f"{section['Ix']:g} in^4")),
+            (("Section modulus Sx", f"{section['Sx']:g} in^3"), ("Allowable bending Fb", f"{material['Fb']:g} ksi"), ("Deflection limit", f"L/{self.limit.get()}")),
+        )
+        for row, values in enumerate(fields):
+            y = 516 - row * 16
+            for col, (label, value) in enumerate(values):
+                x = 40 + col * 242
+                pdf.text(x, y, f"{label}:", 7, color=COLORS["muted"])
+                pdf.text(x + 94, y, value, 7.5, bold=True)
+        pdf.text(32, 461, "APPLIED LOADS  |  Magnitudes are downward-positive", 9.5, bold=True, color=COLORS["blue"])
+        self._draw_load_table_header(pdf, 445)
+        if not self.loads:
+            pdf.text(42, 430, "No applied loads", 7.5, color=COLORS["muted"])
+        for index, load in enumerate(self.loads, start=1):
+            y = 430 - (index - 1) * 13
+            if load.kind == "point":
+                kind, magnitude, location = "Point", f"{load.magnitude:g} kips", f"At {load.position:g} ft"
+            else:
+                kind, magnitude, location = "Uniform", f"{load.magnitude:g} kip/ft", f"{load.start:g} to {load.end:g} ft"
+            pdf.text(42, y, f"{index:02d}", 7.5)
+            pdf.text(105, y, kind, 7.5)
+            pdf.text(245, y, magnitude, 7.5)
+            pdf.text(410, y, location, 7.5)
+            pdf.line(40, y - 4, 752, y - 4, color="#edf1f5", width=.5)
+
+    def _draw_calc_inputs(self, pdf: VectorPDF) -> None:
+        material, section = self._section()
+        pdf.text(32, 577, "Beam Designer | Calculation Sheet", 19, bold=True, color=COLORS["navy"])
+        pdf.text(32, 559, f"Inputs and applied loads  |  Generated {date.today().isoformat()}", 9, color=COLORS["muted"])
+        pdf.line(32, 550, 760, 550, color=COLORS["line"], width=1)
+        pdf.text(32, 532, "BEAM INPUTS", 10, bold=True, color=COLORS["blue"])
+
+        left_fields = (
+            ("Support", self.support.get()),
+            ("Span", f"{self.span.get():g} ft"),
+            ("Material", self.material.get()),
+            ("Section", self.section.get()),
+            ("Deflection limit", f"L/{self.limit.get()}"),
+            ("Load case", "ASD, combined D + L service loads"),
+        )
+        right_fields = (
+            ("Elastic modulus E", f"{material['E']:g} ksi"),
+            ("Moment of inertia Ix", f"{section['Ix']:g} in^4"),
+            ("Section modulus Sx", f"{section['Sx']:g} in^3"),
+            ("Allowable bending Fb", f"{material['Fb']:g} ksi"),
+            ("Self-weight", "Excluded"),
+            ("Steel assumptions", "Compact, fully laterally braced" if "bf" in section else "Not applicable"),
+        )
+        for index, (left, right) in enumerate(zip(left_fields, right_fields)):
+            y = 512 - index * 18
+            pdf.text(40, y, left[0], 8, color=COLORS["muted"])
+            pdf.text(152, y, left[1], 8.5, bold=True)
+            pdf.text(400, y, right[0], 8, color=COLORS["muted"])
+            pdf.text(535, y, right[1], 8.5, bold=True)
+        pdf.line(32, 399, 760, 399, color=COLORS["line"])
+        pdf.text(32, 382, "APPLIED LOADS", 10, bold=True, color=COLORS["blue"])
+        self._draw_load_table_header(pdf, 365)
+        y = 348
+        if not self.loads:
+            pdf.text(42, y, "No applied loads", 8.5, color=COLORS["muted"])
+        for index, load in enumerate(self.loads, start=1):
+            if y < 62:
+                pdf.text(32, 35, "Beam Designer calculation sheet | Loads continued on next page", 7.5, color=COLORS["muted"])
+                pdf.new_page()
+                pdf.text(32, 577, "Beam Designer | Applied Loads (continued)", 17, bold=True, color=COLORS["navy"])
+                pdf.text(32, 558, f"{self.support.get()} beam  |  {self.span.get():g} ft span  |  {self.section.get()}", 9, color=COLORS["muted"])
+                self._draw_load_table_header(pdf, 530)
+                y = 513
+            if load.kind == "point":
+                kind, magnitude = "Point", f"{load.magnitude:g} kips"
+                location = f"At {load.position:g} ft"
+            else:
+                kind, magnitude = "Uniform", f"{load.magnitude:g} kip/ft"
+                location = f"{load.start:g} to {load.end:g} ft"
+            pdf.text(42, y, f"{index:02d}", 8)
+            pdf.text(105, y, kind, 8)
+            pdf.text(245, y, magnitude, 8)
+            pdf.text(410, y, location, 8)
+            pdf.line(40, y - 4, 752, y - 4, color="#edf1f5", width=.5)
+            y -= 15
+        pdf.text(32, 35, "Preliminary analysis sheet. A pass is not complete structural design approval.", 7.5, color=COLORS["muted"])
+
+    @staticmethod
+    def _draw_load_table_header(pdf: VectorPDF, y: float) -> None:
+        pdf.rect(36, y - 5, 720, 17, fill="#edf4fb")
+        pdf.text(42, y, "#", 8, bold=True)
+        pdf.text(105, y, "Load type", 8, bold=True)
+        pdf.text(245, y, "Magnitude", 8, bold=True)
+        pdf.text(410, y, "Location", 8, bold=True)
+
+    def _draw_calc_analysis(self, pdf: VectorPDF, *, compact: bool = False) -> None:
+        analysis = self.analysis
+        moment_x, moment_value = analysis["moment"]
+        shear_x, shear_value = analysis["shear"]
+        deflection_x, deflection_value = analysis["deflection"]
+        stress_pass = analysis["stress"] <= analysis["allowable"]
+        deflection_pass = abs(deflection_value) <= analysis["limit"]
+        if compact:
+            pdf.text(32, 380, "RESULTS AND CHECKS", 9.5, bold=True, color=COLORS["blue"])
+            card_y, card_height = 321, 49
+            check_y, reaction_y = 304, 289
+            beam_y, beam_height = 190, 91
+            plot_y, plot_height = 49, 129
+        else:
+            pdf.text(32, 577, "Beam Designer | Analysis Results", 19, bold=True, color=COLORS["navy"])
+            pdf.text(32, 559, f"{self.support.get()}  |  {self.span.get():g} ft  |  {self.section.get()}  |  ASD", 9, color=COLORS["muted"])
+            card_y, card_height = 489, 56
+            check_y, reaction_y = 472, 455
+            beam_y, beam_height = 322, 118
+            plot_y, plot_height = 100, 205
+        metrics = (
+            ("MAX MOMENT", f"{abs(moment_value) / 12:.2f} kip-ft", f"At {moment_x / 12:.2f} ft"),
+            ("MAX SHEAR", f"{abs(shear_value):.2f} kips", f"At {shear_x / 12:.2f} ft"),
+            ("BENDING STRESS", f"{analysis['stress']:.3f} ksi", f"Allowable {analysis['allowable']:.3f} ksi"),
+            ("MAX DEFLECTION", f"{abs(deflection_value):.3f} in", f"Limit {analysis['limit']:.3f} in, L/{self.limit.get()}"),
+        )
+        for index, (label, value, detail) in enumerate(metrics):
+            x = 32 + index * 184
+            pdf.rect(x, card_y, 174, card_height, fill="#f5f8fc", stroke=COLORS["line"])
+            pdf.text(x + 9, card_y + card_height - 14, label, 7.3, bold=True, color=COLORS["muted"])
+            pdf.text(x + 9, card_y + card_height - 30, value, 11 if compact else 12, bold=True, color=COLORS["navy"])
+            pdf.text(x + 9, card_y + 5, detail, 6.6 if compact else 7.2, color=COLORS["muted"])
+
+        pdf.text(34, check_y, f"Bending check: {'PASS' if stress_pass else 'FAIL'}  |  fb = {analysis['stress']:.3f} ksi <= Fb = {analysis['allowable']:.3f} ksi", 8 if compact else 9, bold=True, color=COLORS["green"] if stress_pass else COLORS["red"])
+        pdf.text(400, check_y, f"Deflection check: {'PASS' if deflection_pass else 'FAIL'}  |  {abs(deflection_value):.3f} in <= {analysis['limit']:.3f} in", 8 if compact else 9, bold=True, color=COLORS["green"] if deflection_pass else COLORS["red"])
+        if self.support.get() == "Cantilever":
+            reaction = f"Fixed-end reaction {analysis['left']:.2f} kips  |  Fixed-end moment {abs(analysis['fixed_moment']) / 12:.2f} kip-ft"
+        else:
+            reaction = f"Left reaction {analysis['left']:.2f} kips  |  Right reaction {analysis['right']:.2f} kips"
+        pdf.text(34, reaction_y, reaction, 8 if compact else 8.5, bold=True)
+        self._draw_beam_pdf(pdf, x=32, y=beam_y, width=728, height=beam_height, compact=compact)
+
+        plot_h, plot_w = plot_height, 232
+        for index, key in enumerate(("shear", "moment", "deflection")):
+            self._draw_calc_plot(pdf, key, x=32 + index * 248, y=plot_y, width=plot_w, height=plot_h)
+        if compact:
+            pdf.text(32, 31, "ASD D + L service loads; self-weight, load combinations, shear stress, and buckling are excluded.", 6.5, color=COLORS["muted"])
+            pdf.text(32, 20, "Steel assumed compact and fully laterally braced. A pass is not complete structural design approval.", 6.5, bold=True, color=COLORS["red"])
+        else:
+            pdf.text(32, 76, "ASD service loads represent combined D + L. Self-weight and load combinations are excluded.", 7.5, color=COLORS["muted"])
+            pdf.text(32, 64, "Shear stress and buckling are not checked. Steel sections are assumed compact and fully laterally braced.", 7.5, color=COLORS["muted"])
+            pdf.text(32, 48, "This preliminary calculation sheet is not a complete structural design approval.", 8, bold=True, color=COLORS["red"])
+
+    def _draw_beam_pdf(self, pdf: VectorPDF, *, x: float, y: float, width: float, height: float, compact: bool = False) -> None:
+        pdf.rect(x, y, width, height, stroke=COLORS["line"])
+        pdf.text(x + 10, y + height - (12 if compact else 17), "BEAM AND LOADING", 7.5 if compact else 8, bold=True, color=COLORS["blue"])
+        left, right = x + 42, x + width - 26
+        beam_y = y + (39 if compact else 51)
+        span = self.span.get()
+        x_at = lambda position: left + clamp(position / span, 0, 1) * (right - left)
+        for load in (item for item in self.loads if item.kind == "uniform"):
+            start_x, end_x = x_at(load.start), x_at(load.end)
+            if end_x <= start_x:
+                continue
+            load_line_y = beam_y + (22 if compact else 31)
+            pdf.line(start_x, load_line_y, end_x, load_line_y, color=COLORS["teal"], width=1.2, dash=True)
+            count = max(2, min(15, int((end_x - start_x) / 42) + 1))
+            for index in range(count):
+                arrow_x = start_x + (end_x - start_x) * index / (count - 1)
+                self._pdf_down_arrow(pdf, arrow_x, load_line_y - 3, beam_y + 4, COLORS["teal"])
+            pdf.text((start_x + end_x) / 2 - 20, load_line_y + 3, f"{load.magnitude:g} kip/ft", 6.5 if compact else 7, color=COLORS["teal"])
+        for load in (item for item in self.loads if item.kind == "point"):
+            arrow_x = x_at(load.position)
+            load_top = beam_y + (23 if compact else 32)
+            self._pdf_down_arrow(pdf, arrow_x, load_top, beam_y + 4, COLORS["blue"], width=1.4)
+            pdf.text(arrow_x - 18, load_top + 3, f"{load.magnitude:g} kips", 6.5 if compact else 7, color=COLORS["blue"])
+        pdf.line(left, beam_y, right, beam_y, color=COLORS["navy"], width=5)
+        if self.support.get() == "Cantilever":
+            pdf.line(left - 8, beam_y - 13, left - 8, beam_y + 17, color=COLORS["blue"], width=2)
+            for hatch_y in range(int(beam_y - 12), int(beam_y + 17), 6):
+                pdf.line(left - 8, hatch_y, left - 17, hatch_y + 5, color="#9db0c4", width=1)
+        else:
+            for support_x in (left, right):
+                pdf.polyline([(support_x, beam_y - 2), (support_x - 10, beam_y - 17), (support_x + 10, beam_y - 17), (support_x, beam_y - 2)], color=COLORS["blue"], width=1.2)
+                pdf.line(support_x - 16, beam_y - 19, support_x + 16, beam_y - 19, color="#9db0c4", width=1)
+        dimension_y = y + (12 if compact else 21)
+        pdf.line(left, dimension_y, right, dimension_y, color="#9aaabe", width=.8)
+        pdf.line(left, dimension_y - 3, left, dimension_y + 3, color="#9aaabe", width=.8)
+        pdf.line(right, dimension_y - 3, right, dimension_y + 3, color="#9aaabe", width=.8)
+        pdf.text(left - 3, dimension_y - 10, "0 ft", 6.5 if compact else 7, color=COLORS["muted"])
+        pdf.text((left + right) / 2 - 20, dimension_y - 10, f"{span:g} ft span", 6.5 if compact else 7, color=COLORS["muted"])
+        pdf.text(right - 18, dimension_y - 10, f"{span:g} ft", 6.5 if compact else 7, color=COLORS["muted"])
+
+    @staticmethod
+    def _pdf_down_arrow(pdf: VectorPDF, x: float, top: float, bottom: float, color: str, width: float = 1) -> None:
+        pdf.line(x, top, x, bottom, color=color, width=width)
+        pdf.line(x, bottom, x - 3, bottom + 5, color=color, width=width)
+        pdf.line(x, bottom, x + 3, bottom + 5, color=color, width=width)
+
+    def _draw_calc_plot(self, pdf: VectorPDF, key: str, *, x: float, y: float, width: float, height: float) -> None:
+        analysis = self.analysis
+        titles = {"shear": "SHEAR V (kips)", "moment": "MOMENT M (kip-ft)", "deflection": "DEFLECTION (in)"}
+        pdf.rect(x, y, width, height, stroke=COLORS["line"])
+        pdf.text(x + 9, y + height - 16, titles[key], 8, bold=True, color=COLORS["navy"])
+        if key == "shear":
+            value_at = analysis["shear_at"]
+            scale = max(abs(analysis["shear"][1]), .01)
+            color = COLORS["blue"]
+        elif key == "moment":
+            value_at = lambda position: analysis["moment_at"](position) / 12
+            scale = max(abs(analysis["moment"][1]) / 12, .01)
+            color = COLORS["purple"]
+        else:
+            value_at = analysis["deflection_at"]
+            scale = max(abs(analysis["deflection"][1]), analysis["limit"], .001)
+            color = COLORS["teal"]
+        plot_left, plot_right = x + 34, x + width - 10
+        plot_bottom, plot_top = y + 35, y + height - 34
+        middle = (plot_bottom + plot_top) / 2
+        half_height = (plot_top - plot_bottom) / 2 - 3
+        scale *= 1.15
+        span_in = analysis["span_in"]
+        x_at = lambda position: plot_left + position / span_in * (plot_right - plot_left)
+        y_at = lambda value: middle - value / scale * half_height if key == "deflection" else middle + value / scale * half_height
+        pdf.line(plot_left, plot_bottom, plot_left, plot_top, color=COLORS["line"], width=.7)
+        pdf.line(plot_left, middle, plot_right, middle, color="#95a5b7", width=.8)
+        pdf.line(plot_right, plot_bottom, plot_right, plot_top, color=COLORS["line"], width=.7)
+        if key == "deflection":
+            limit_y = y_at(analysis["limit"])
+            pdf.line(plot_left, limit_y, plot_right, limit_y, color=COLORS["red"], width=.8, dash=True)
+            pdf.text(plot_right - 25, limit_y + 3, f"L/{self.limit.get()}", 6.5, color=COLORS["red"])
+        count = 96
+        positions = {span_in * index / count for index in range(count + 1)}
+        positions.update(clamp(point, 0, span_in) for point in analysis["breakpoints"])
+        point_positions = {load.position * 12 for load in self.loads if load.kind == "point"}
+        points = []
+        for position in sorted(positions):
+            if key == "shear" and position in point_positions:
+                points.append((x_at(position), y_at(value_at(position, include_at=False))))
+                points.append((x_at(position), y_at(value_at(position, include_at=True))))
+            else:
+                points.append((x_at(position), y_at(value_at(position))))
+        pdf.polyline(points, color=color, width=1.5)
+        pdf.text(plot_left, plot_bottom - 12, "0", 6.5, color=COLORS["muted"])
+        pdf.text(plot_right - 25, plot_bottom - 12, f"{self.span.get():g} ft", 6.5, color=COLORS["muted"])
+        pdf.text(plot_left + 2, plot_top - 8, f"+{scale / 1.15:.3g}", 6.2, color=COLORS["muted"])
+        pdf.text(plot_left + 2, plot_bottom + 3, f"-{scale / 1.15:.3g}", 6.2, color=COLORS["muted"])
 
     def _install_scroll_bindings(self, parent: tk.Widget) -> None:
         """Catch wheel events before widget-class bindings can consume them."""
