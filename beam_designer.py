@@ -142,6 +142,8 @@ class BeamDesigner:
         ttk.Label(header, text="Beam Designer", style="Title.TLabel").pack(side="left")
         self.example_label = ttk.Label(header, text="●  Example loaded", foreground=COLORS["green"])
         self.example_label.pack(side="right", anchor="e")
+        ttk.Button(header, text="Add uniform load", style="Accent.TButton", command=lambda: self._add_load("uniform")).pack(side="right", padx=(8, 14))
+        ttk.Button(header, text="Add point load", style="Accent.TButton", command=lambda: self._add_load("point")).pack(side="right", padx=(8, 0))
 
         self.main = ttk.Frame(self.root, padding=(18, 0, 18, 16))
         self.main.pack(fill="both", expand=True)
@@ -219,11 +221,6 @@ class BeamDesigner:
         self.load_window = self.load_canvas.create_window((0, 0), window=self.load_editor, anchor="nw")
         self.load_editor.bind("<Configure>", lambda _e: self.load_canvas.configure(scrollregion=self.load_canvas.bbox("all")))
         self.load_canvas.bind("<Configure>", lambda e: self.load_canvas.itemconfigure(self.load_window, width=e.width))
-        buttons = ttk.Frame(loads, style="Card.TFrame")
-        buttons.pack(fill="x", pady=(8, 0))
-        ttk.Button(buttons, text="+ Point load", command=lambda: self._add_load("point")).pack(side="left", expand=True, fill="x", padx=(0, 4))
-        ttk.Button(buttons, text="+ Uniform load", command=lambda: self._add_load("uniform")).pack(side="left", expand=True, fill="x", padx=(4, 0))
-
     def _field_label(self, parent: tk.Widget, text: str) -> None:
         ttk.Label(parent, text=text, style="Card.TLabel").pack(anchor="w", pady=(2, 0))
 
