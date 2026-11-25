@@ -146,10 +146,6 @@ class BeamDesigner:
         self.content_window = self.app_canvas.create_window((0, 0), window=self.content, anchor="nw")
         self.content.bind("<Configure>", lambda _e: self.app_canvas.configure(scrollregion=self.app_canvas.bbox("all")))
         self.app_canvas.bind("<Configure>", lambda e: self.app_canvas.itemconfigure(self.content_window, width=e.width))
-        self.root.bind_all("<MouseWheel>", self._on_mousewheel, add="+")
-        self.root.bind_all("<Button-4>", self._on_mousewheel, add="+")
-        self.root.bind_all("<Button-5>", self._on_mousewheel, add="+")
-
         header = ttk.Frame(self.content, padding=(24, 18, 24, 12))
         header.pack(fill="x")
         ttk.Label(header, text="Beam Designer", style="Title.TLabel").pack(side="left")
@@ -173,6 +169,10 @@ class BeamDesigner:
         self._build_results()
         self._build_beam_canvas()
         self._build_plot_canvases()
+        self.root.bind_class("BeamDesignerScroll", "<MouseWheel>", self._on_mousewheel)
+        self.root.bind_class("BeamDesignerScroll", "<Button-4>", self._on_mousewheel)
+        self.root.bind_class("BeamDesignerScroll", "<Button-5>", self._on_mousewheel)
+        self._install_scroll_bindings(self.root)
 
     def _build_sidebar(self) -> None:
         setup = self._card(self.sidebar)
@@ -325,6 +325,14 @@ class BeamDesigner:
         target.yview_scroll(units, "units")
         return "break"
 
+    def _install_scroll_bindings(self, parent: tk.Widget) -> None:
+        """Catch wheel events before widget-class bindings can consume them."""
+        tags = parent.bindtags()
+        if "BeamDesignerScroll" not in tags:
+            parent.bindtags((tags[0], "BeamDesignerScroll", *tags[1:]))
+        for child in parent.winfo_children():
+            self._install_scroll_bindings(child)
+
     def _on_material(self, _event=None) -> None:
         sections = tuple(MATERIALS[self.material.get()]["sections"])
         self.section_box.configure(values=sections)
@@ -366,6 +374,7 @@ class BeamDesigner:
         self.load_count.configure(text=f"{len(self.loads)} load{'s' if len(self.loads) != 1 else ''}")
         if not self.loads:
             ttk.Label(self.load_editor, text="No loads. Add a point or uniform load to begin.", style="Muted.TLabel", wraplength=280).pack(anchor="w", pady=10)
+            self._install_scroll_bindings(self.load_editor)
             return
         for index, item in enumerate(self.loads, 1):
             row = ttk.Frame(self.load_editor, style="Card.TFrame", padding=(0, 5))
@@ -394,6 +403,7 @@ class BeamDesigner:
                 entry.bind("<Return>", lambda _e, load=item, name=field, var=variable: self._commit_load_field(load, name, var))
                 entry.bind("<FocusOut>", lambda _e, load=item, name=field, var=variable: self._commit_load_field(load, name, var))
                 ttk.Label(cell, text=unit, style="Muted.TLabel").pack(anchor="e")
+        self._install_scroll_bindings(self.load_editor)
 
     def _commit_load_field(self, item: Load, field: str, variable: tk.StringVar) -> None:
         try:
